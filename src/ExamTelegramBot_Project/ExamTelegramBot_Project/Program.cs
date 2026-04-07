@@ -1,204 +1,195 @@
-﻿using ExamTelegramBot_Project;
-using System.Text.Json;
+﻿using System.Text.Json;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
-namespace ExamCode
+namespace ExamTelegramBot_Project;
+
+internal class Program
 {
-    internal class Program
+    private static readonly string BOT_TOKEN = "8492786743:AAF_lYp3bL2TxwEtXP2zMug2chhWFIwowbI";
+    private static readonly string USERS_FILE = Path.Combine(AppContext.BaseDirectory, "users.json");
+    private static readonly string PHOTOS_DIR = Path.Combine(AppContext.BaseDirectory, "downloaded_photos");
+    private static readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(60) };
+
+    static async Task Main()
     {
-        static void Main(string[] args)
+        if (!Directory.Exists(PHOTOS_DIR)) Directory.CreateDirectory(PHOTOS_DIR);
+        if (!File.Exists(USERS_FILE)) File.WriteAllText(USERS_FILE, "{}");
+
+        var botClient = new TelegramBotClient(BOT_TOKEN);
+        using var cts = new CancellationTokenSource();
+
+        var receiverOptions = new ReceiverOptions
         {
-            // Bot token: tavsiya qilinadi—environment o'zgaruvchisidan o'qish
-            string botToken = Environment.GetEnvironmentVariable("8492786743:AAF_lYp3bL2TxwEtXP2zMug2chhWFIwowbI") ?? "8492786743:AAF_lYp3bL2TxwEtXP2zMug2chhWFIwowbI";
+            AllowedUpdates = [UpdateType.Message]
+        };
 
-            string usersFile = Path.Combine(AppContext.BaseDirectory, "users.json");
-            string photosDirectory = Path.Combine(AppContext.BaseDirectory, "downloaded_photos");
+        botClient.StartReceiving(
+            HandleUpdateAsync,
+            HandleErrorAsync,
+            receiverOptions,
+            cts.Token
+        );
 
-            if (!Directory.Exists(photosDirectory)) Directory.CreateDirectory(photosDirectory);
-            if (!File.Exists(usersFile)) File.WriteAllText(usersFile, "{}");
+        Console.WriteLine("Bot ishga tushdi!");
+        Console.ReadLine();
+        await cts.CancelAsync();
+    }
 
-            var botClient = new TelegramBotClient(botToken);
+    static Dictionary<string, string> LoadUsers()
+    {
+        try
+        {
+            var json = File.ReadAllText(USERS_FILE);
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
-            Dictionary<string, string> LoadUsers()
+    static void SaveUsers(Dictionary<string, string> users)
+    {
+        var json = JsonSerializer.Serialize(users, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(USERS_FILE, json);
+    }
+
+    static List<string> SearchPhotos(string query)
+    {
+        var urls = new List<string>();
+        var random = new Random();
+        var encodedQuery = Uri.EscapeDataString(query);
+
+        for (int i = 0; i < 3; i++)
+        {
+            var seed = random.Next(1, 100000);
+            urls.Add($"https://image.pollinations.ai/prompt/{encodedQuery}?width=600&height=400&nologo=true&seed={seed}");
+        }
+
+        return urls;
+    }
+
+    static async Task<string> DownloadPhoto(string photoUrl, string query, string userId)
+    {
+        try
+        {
+            var response = await httpClient.GetAsync(photoUrl);
+            if (response.IsSuccessStatusCode)
             {
-                try
-                {
-                    var json = File.ReadAllText(usersFile);
-                    return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new Dictionary<string, string>();
-                }
-                catch
-                {
-                    return new Dictionary<string, string>();
-                }
-            }
+                var safeQuery = string.Concat(query.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch))).Replace(' ', '_');
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
+                var fileName = $"{userId}_{safeQuery}_{timestamp}.jpg";
+                var filePath = Path.Combine(PHOTOS_DIR, fileName);
 
-            void SaveUsers(Dictionary<string, string> users)
-            {
-                var json = JsonSerializer.Serialize(users, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(usersFile, json);
-            }
+                using var stream = await response.Content.ReadAsStreamAsync();
+                using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
+                await stream.CopyToAsync(fileStream);
 
-            // SearchPhotos: Unsplash Source (no API key). Hamma rasmga alohida so'rov yuborib, redirect qilingan final URL olamiz.
-            async Task<List<string>> SearchPhotos(string query)
-            {
-                var urls = new List<string>();
-
-                for (int i = 0; i < 3; i++)
-                {
-                    var randomSeed = new Random().Next(1000, 9999);
-                    urls.Add($"https://picsum.photos/600/400?random={randomSeed}");
-                }
-
-                return urls;
-            }
-
-            async Task<string> DownloadPhoto(string photoUrl, string query)
-            {
-                using var httpClient = new HttpClient();
-                try
-                {
-                    var response = await httpClient.GetAsync(photoUrl);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var safeQuery = string.Concat(query.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch))).Replace(' ', '_');
-                        var fileName = $"{safeQuery}_{DateTime.UtcNow:yyyyMMdd_HHmmssfff}.jpg";
-                        var filePath = Path.Combine(photosDirectory, fileName);
-
-                        using var stream = await response.Content.ReadAsStreamAsync();
-                        using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
-                        await stream.CopyToAsync(fileStream);
-
-                        return filePath;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"DownloadPhoto xato: {ex.Message}");
-                }
-                return string.Empty;
-            }
-
-            async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken ct)
-            {
-                try
-                {
-                    if (update.Type != UpdateType.Message) return;
-                    var message = update.Message;
-                    if (message?.Type != MessageType.Text) return;
-
-                    var userId = message.From?.Id.ToString() ?? "";
-                    var userName = message.From?.Username ?? message.From?.FirstName ?? "Unknown";
-                    var text = message.Text?.Trim() ?? "";
-
-                    if (text == "/start")
-                    {
-                        var users = LoadUsers();
-                        if (!users.ContainsKey(userId))
-                        {
-                            users[userId] = userName;
-                            SaveUsers(users);
-                        }
-
-                        await client.SendMessage(message.Chat.Id, $"Assalomu alaykum, {userName}! Siz ro'yxatga olindingiz.", cancellationToken: ct);
-                        return;
-                    }
-
-                    if (text == "/help")
-                    {
-                        await client.SendMessage(message.Chat.Id, "Istalgan so'zni yuboring — men unga oid 3 ta rasm topib yuboraman va lokalga saqlayman.", cancellationToken: ct);
-                        return;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        var users = LoadUsers();
-                        if (!users.ContainsKey(userId))
-                        {
-                            users[userId] = userName;
-                            SaveUsers(users);
-                        }
-
-                        await client.SendMessage(message.Chat.Id, $"Qidirilmoqda: \"{text}\" — iltimos kuting...", cancellationToken: ct);
-
-                        var photoUrls = await SearchPhotos(text);
-                        if (photoUrls.Count == 0)
-                        {
-                            await client.SendMessage(message.Chat.Id, $"\"{text}\" uchun rasm topilmadi.", cancellationToken: ct);
-                            return;
-                        }
-
-                        var downloadedPhotos = new List<string>();
-                        foreach (var url in photoUrls.Take(3))
-                        {
-                            try
-                            {
-                                var photoPath = await DownloadPhoto(url, text);
-                                if (!string.IsNullOrEmpty(photoPath))
-                                {
-                                    downloadedPhotos.Add(photoPath);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Saqlashda xato ({url}): {ex.Message}");
-                            }
-                        }
-
-                        if (downloadedPhotos.Count > 0)
-                        {
-                            foreach (var photoPath in downloadedPhotos)
-                            {
-                                try
-                                {
-                                    using var fs = File.OpenRead(photoPath);
-                                    var input = new InputOnlineFile(fs, Path.GetFileName(photoPath));
-                                    await client.SendPhoto(message.Chat.Id, input, cancellationToken: ct);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"Rasm yuborishda xato: {ex.Message}");
-                                }
-                            }
-
-                            await client.SendMessage(message.Chat.Id, $"Topilgan va saqlangan rasmlar: {downloadedPhotos.Count}\nPapka: {photosDirectory}", cancellationToken: ct);
-                        }
-                        else
-                        {
-                            await client.SendMessage(message.Chat.Id, "Rasmlar saqlanmadi.", cancellationToken: ct);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"HandleUpdateAsync umumiy xato: {ex.Message}");
-                }
-            }
-
-            async Task HandleErrorAsync(ITelegramBotClient client, Exception exception, CancellationToken ct)
-            {
-                Console.WriteLine($"Bot xatosi: {exception.Message}");
-            }
-
-            using (var cts = new CancellationTokenSource())
-            {
-                var receiverOptions = new ReceiverOptions
-                {
-                    AllowedUpdates = new[] { UpdateType.Message }
-                };
-
-                botClient.StartReceiving(
-                    updateHandler: HandleUpdateAsync,
-                    errorHandler: HandleErrorAsync,
-                    receiverOptions: receiverOptions,
-                    cancellationToken: cts.Token);
-
-                Console.WriteLine("Bot ishga tushdi. To'xtatish uchun Enter bosing...");
-                Console.ReadLine();
-                cts.Cancel();
+                return filePath;
             }
         }
+        catch
+        {
+        }
+        return string.Empty;
+    }
+
+    static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (update.Type != UpdateType.Message || update.Message?.Type != MessageType.Text) return;
+
+            var message = update.Message;
+            var userId = message.From!.Id.ToString();
+            var userName = message.From.Username ?? message.From.FirstName ?? "Unknown";
+            var chatId = message.Chat.Id;
+            var text = message.Text?.Trim() ?? "";
+
+            if (text == "/start")
+            {
+                var users = LoadUsers();
+                if (!users.ContainsKey(userId))
+                {
+                    users[userId] = userName;
+                    SaveUsers(users);
+                    await botClient.SendMessage(chatId, $"Assalomu alaykum, {userName}! Siz ro'yxatga olindingiz.\n\nMenga istalgan ob'ekt nomini yozing, men sizga 3 ta rasm topib beraman.", cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    await botClient.SendMessage(chatId, $"Assalomu alaykum, {userName}! Siz allaqachon ro'yxatdan o'tgansiz.\n\nMenga istalgan ob'ekt nomini yozing, men sizga 3 ta rasm topib beraman.", cancellationToken: cancellationToken);
+                }
+                return;
+            }
+
+            if (text == "/help")
+            {
+                await botClient.SendMessage(chatId, "/start - Ro'yxatdan o'tish\n/help - Yordam\nIstalgan ob'ekt nomini yozing - 3 ta rasm topib beraman", cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                var users = LoadUsers();
+                if (!users.ContainsKey(userId))
+                {
+                    users[userId] = userName;
+                    SaveUsers(users);
+                }
+
+                await botClient.SendMessage(chatId, $"🔍 \"{text}\" uchun qidirilmoqda...\n⏳ Iltimos, kuting", cancellationToken: cancellationToken);
+
+                var photoUrls = SearchPhotos(text);
+                var downloadedPhotos = new List<string>();
+
+                foreach (var url in photoUrls)
+                {
+                    var photoPath = await DownloadPhoto(url, text, userId);
+                    if (!string.IsNullOrEmpty(photoPath))
+                    {
+                        downloadedPhotos.Add(photoPath);
+                    }
+                }
+
+                if (downloadedPhotos.Count > 0)
+                {
+                    int photoNumber = 1;
+                    foreach (var photoPath in downloadedPhotos)
+                    {
+                        using var fs = File.OpenRead(photoPath);
+                        var inputFile = InputFile.FromStream(fs, Path.GetFileName(photoPath));
+
+                        await botClient.SendPhoto(chatId, inputFile, caption: $"🖼️ {photoNumber}/{downloadedPhotos.Count}", cancellationToken: cancellationToken);
+                        photoNumber++;
+                        await Task.Delay(500, cancellationToken);
+                    }
+
+                    await botClient.SendMessage(chatId, $"✅ Hammasi tayyor! {downloadedPhotos.Count} ta rasm topildi va saqlandi.", cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    await botClient.SendMessage(chatId, "❌ Kechirasiz, rasmlarni yuklab olishda xatolik yuz berdi.\n🔄 Qaytadan urinib ko'ring.", cancellationToken: cancellationToken);
+                }
+            }
+        }
+        catch
+        {
+            try
+            {
+                if (update.Message != null)
+                {
+                    await botClient.SendMessage(update.Message.Chat.Id, "Botda xatolik yuz berdi. Qaytadan urinib ko'ring.", cancellationToken: cancellationToken);
+                }
+            }
+            catch { }
+        }
+    }
+
+    static Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
     }
 }
