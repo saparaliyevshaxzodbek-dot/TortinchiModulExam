@@ -1,3 +1,37 @@
 HEAP dagi SOH haqida gapirib bering nega kerak nima ozi u
 Idisposible nma
 ref va out ni tushuntirib bering
+
+
+1.HEAP va SOH
+Heap - bu xotiraning katta bir qismi, object turlar (string, array, class) shu joyda saqlanadi.  new qilib yaratgan hamma narsalar Heapga tushadi.
+Stack - kichik, tez xotira int bool double kabi value type lar va referensiyalarning manzili shu yerda saqlanadi.
+
+nima ga kerak
+Stack tez lekin kichik, heap sekinroq lekin katta
+Stackda o'zgaruvchi ishi tugagach o'zi o'chadi, heapda esa Garbage Collector (GC) kelib tozalaydi
+
+
+
+
+2.IDisposable - bu bir "interfeys". Unda Dispose() degan metod bor.
+Ba'zi narsalar (file, database connection, network socket) .NET o'zi avtomatik tozalay olmaydi IDisposable shularni qo'lda tozalash uchun kerak shu uchun ishlatamiz
+File ochdingiz ishlatib bo'lgandan keyin yopmasangiz - boshqa joyda o'sha file ni ocholmay qolasiz Yoki database connection ochiq qolsa memory leak bo'ladi
+
+
+
+3. ref va out
+
+Ikkalasi ham referensiya bo'yicha o'tkazish uchun Ya'ni metod ichida o'zgaruvchini o'zgartirsangiz tashqarida ham o'zgaradi
+
+ref:
+Kirishda o'zgaruvchi OLDINDAN qiymat olishi shart
+
+Metodga borib, o'sha qiymatni o'zgartirish mumkin
+
+out:
+Kirishda o'zgaruvchi qiymatga ega bo'lishi SHART EMAS
+
+Metod CHIQISHIDA albatta qiymat berishi kerak
+
+Ko'pincha bir nechta qiymat qaytarish uchun ishlatiladi
